@@ -1,0 +1,10 @@
+*.log
+.env
+*.tmp
+.DS_Store
+telegram-config.sh
+*.config.local
+*secrets*
+*/secrets/*
+private/
+
