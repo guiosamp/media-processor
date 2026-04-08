@@ -62,7 +62,6 @@ media-processor/
 │   ├── telegram-notifier.sh        # Notificações Telegram
 │   ├── telegram-config-example.sh  # Template de configuração
 │   ├── converter_mp4.sh            # Conversor MKV→MP4 principal
-│   ├── converter-wrapper.sh        # Wrapper para conversão
 │   └── media-processor.service     # Service file systemd
 ├── references/
 │   ├── qbittorrent-setup.md        # Configuração do qBittorrent

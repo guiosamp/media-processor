@@ -29,16 +29,6 @@ Script principal para conversão de arquivos MKV para MP4 com ajuste de offset d
 ./converter_mp4.sh
 ```
 
-## `converter-wrapper.sh`
-
-Wrapper simples que chama o script principal. Útil para integrações onde se espera um script específico.
-
-### Uso
-```bash
-# Mesmos parâmetros do script principal
-./converter-wrapper.sh --path "/caminho/para/arquivo.mkv"
-```
-
 ## Integração com Media Processor
 
 O script é automaticamente chamado pelo `media-processor-cli.sh` durante o processamento. Não é necessário executá-lo manualmente.
