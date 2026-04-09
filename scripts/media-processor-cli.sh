@@ -4,7 +4,7 @@
 QB_DOWNLOADS_DIR='/mnt/media/qbittorrent/downloads/'
 CONVERTER_SCRIPT="$(dirname "$0")/converter_mp4.sh"
 JELLYFIN_MEDIA_DIR='/mnt/media/jellyfin/media/'
-TELEGRAM_NOTIFIER_SCRIPT='scripts/telegram-notifier.sh'
+TELEGRAM_NOTIFIER_SCRIPT="$(dirname "$0")/telegram-notifier.sh"
 LOG_DIR='/var/log/media-processor/'
 LOG_FILE="${LOG_DIR}/$(date +%Y-%m-%d).log"
 PROCESSING_DIR="${LOG_DIR}/processing"
@@ -47,10 +47,36 @@ clean_old_locks() {
   find "$PROCESSING_DIR" -name "*.lock" -mtime +1 -delete 2>/dev/null
 }
 
+# Apaga a pasta de origem após processamento bem-sucedido.
+# Só executa se a pasta for uma subpasta de QB_DOWNLOADS_DIR,
+# nunca a raiz de downloads em si.
+cleanup_source_dir() {
+  local file="$1"
+  local dirpath="$(realpath "$(dirname "$file")")"
+  local downloads_root="$(realpath "${QB_DOWNLOADS_DIR%/}")"
+
+  # Garante que é uma subpasta, não a raiz
+  if [[ "$dirpath" == "$downloads_root" ]]; then
+    log INFO "Arquivo estava na raiz de downloads, nenhuma pasta para apagar: $dirpath"
+    return 0
+  fi
+
+  if [[ "$dirpath" == "$downloads_root"/* ]]; then
+    log INFO "Apagando pasta de origem: $dirpath"
+    rm -rf "$dirpath"
+    if [ $? -eq 0 ]; then
+      log INFO "Pasta apagada com sucesso: $dirpath"
+    else
+      log ERRO "Falha ao apagar pasta: $dirpath"
+    fi
+  else
+    log ERRO "Pasta fora de QB_DOWNLOADS_DIR, abortando limpeza por segurança: $dirpath"
+  fi
+}
+
 # Função para verificar codec de áudio
 get_audio_codec() {
   local file="$1"
-  # Usa ffprobe para extrair o codec do primeiro stream de áudio
   ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of default=noprint_wrappers=1:nokey=1 "$file" 2>/dev/null || echo "unknown"
 }
 
@@ -58,17 +84,14 @@ get_audio_codec() {
 needs_audio_conversion() {
   local file="$1"
   local codec=$(get_audio_codec "$file")
-  
-  # Se não conseguir detectar o codec, assume que precisa converter por segurança
+
   if [[ "$codec" == "unknown" ]] || [[ -z "$codec" ]]; then
     log INFO "Não foi possível detectar codec de áudio em: $(basename "$file")"
     return 0  # Precisa converter
   fi
-  
-  # Converte para lowercase para comparação
+
   codec=$(echo "$codec" | tr '[:upper:]' '[:lower:]')
-  
-  # Se for AAC, não precisa converter
+
   if [[ "$codec" == "aac" ]]; then
     log INFO "Codec de áudio já é AAC em: $(basename "$file")"
     return 1  # Não precisa converter
@@ -82,19 +105,14 @@ needs_audio_conversion() {
 move_to_jellyfin() {
   local mp4_file="$1"
   local filename="$2"
-  
-  # Remove barras extras e cria caminho limpo
   local jellyfin_dir="${JELLYFIN_MEDIA_DIR%/}/Filmes/"
-  
-  # Cria diretório se não existir
+
   mkdir -p "$jellyfin_dir"
-  
-  # Move para o Jellyfin
+
   mv "$mp4_file" "$jellyfin_dir"
   if [ $? -eq 0 ]; then
     log INFO "Movido para Jellyfin: $mp4_file -> $jellyfin_dir"
 
-    # Notifica via Telegram
     if [ -x "$TELEGRAM_NOTIFIER_SCRIPT" ]; then
       local final_path="${jellyfin_dir}$(basename "$mp4_file")"
       local file_size="$(du -h "$final_path" 2>/dev/null | cut -f1 || echo "N/A")"
@@ -120,73 +138,32 @@ process_mkv() {
   local filebase="${filename%.*}"
   local dirpath="$(dirname "$file")"
   local mp4_file="${dirpath}/${filebase}.mp4"
-  
+
   log INFO "Processando arquivo MKV: $filename"
-  
-  # Verifica se o arquivo MP4 já existe localmente e está completo
+
+  # Se o MP4 já existe localmente, vai direto para o Jellyfin
   if [ -f "$mp4_file" ]; then
-    local mp4_size=$(stat -c%s "$mp4_file" 2>/dev/null || echo 0)
-    local mkv_size=$(stat -c%s "$file" 2>/dev/null || echo 0)
-    
-    # Verifica se o MP4 tem tamanho razoável (pelo menos 10% do MKV ou 100MB)
-    local min_size=$((mkv_size / 10))
-    if [ "$min_size" -lt 100000000 ]; then
-      min_size=100000000  # Pelo menos 100MB
-    fi
-    
-    if [ "$mp4_size" -gt "$min_size" ]; then
-      log INFO "Arquivo MP4 já existe e parece completo: $mp4_file (${mp4_size} bytes)"
-      move_to_jellyfin "$mp4_file" "$filename"
-      return 0
-    else
-      log INFO "Arquivo MP4 existe mas parece incompleto (${mp4_size} bytes < ${min_size} bytes), reconvertendo..."
-      # Remove o arquivo MP4 incompleto
-      rm -f "$mp4_file"
-    fi
+    log INFO "Arquivo MP4 já existe, movendo para Jellyfin: $mp4_file"
+    move_to_jellyfin "$mp4_file" "$filename"
+    cleanup_source_dir "$file"
+    return 0
   fi
-  
-  # Marcar como em processamento
+
   mark_processing "$file"
-  
-  # Converte para MP4
   log INFO "Iniciando conversão: $filename"
-  
-  # Usar converter_mp4.sh diretamente
+
   if $CONVERTER_SCRIPT --path "$file"; then
     log INFO "Conversão concluída: $filename"
-    
-    # Remover marcação de processamento
     unmark_processing "$file"
-    
-    # Aguarda para garantir que o arquivo foi escrito
     sleep 2
-    
-    # Verifica se o arquivo MP4 foi criado
+
     if [ -f "$mp4_file" ]; then
-      local mp4_size=$(stat -c%s "$mp4_file" 2>/dev/null || echo 0)
-      local mkv_size=$(stat -c%s "$file" 2>/dev/null || echo 0)
-      
-      # Verifica tamanho mínimo
-      local min_size=$((mkv_size / 10))
-      if [ "$min_size" -lt 100000000 ]; then
-        min_size=100000000
-      fi
-      
-      if [ "$mp4_size" -gt "$min_size" ]; then
-        log INFO "Conversão bem-sucedida: $filename (${mp4_size} bytes)"
-        move_to_jellyfin "$mp4_file" "$filename"
-        # Remove o MKV original após sucesso
-        rm -f "$file"
-        return 0
-      else
-        log ERRO "Arquivo MP4 incompleto: ${mp4_size} bytes"
-        rm -f "$mp4_file"
-        unmark_processing "$file"
-        return 1
-      fi
+      log INFO "Conversão bem-sucedida: $filename"
+      move_to_jellyfin "$mp4_file" "$filename"
+      cleanup_source_dir "$file"
+      return 0
     else
-      log ERRO "Arquivo MP4 não criado: $mp4_file"
-      unmark_processing "$file"
+      log ERRO "Arquivo MP4 não encontrado após conversão: $mp4_file"
       return 1
     fi
   else
@@ -203,55 +180,36 @@ process_mp4() {
   local filebase="${filename%.*}"
   local dirpath="$(dirname "$file")"
   local output_file="${dirpath}/${filebase}_converted.mp4"
-  
+
   log INFO "Processando arquivo MP4: $filename"
-  
-  # Verificar se precisa converter o áudio
+
   if needs_audio_conversion "$file"; then
     log INFO "Convertendo áudio para AAC: $filename"
-    
-    # Marcar como em processamento
     mark_processing "$file"
-    
-    # Converter apenas o áudio
+
     if ffmpeg -hide_banner -loglevel error -stats -i "$file" \
         -map 0:v -c:v copy \
         -map 0:a -c:a aac -b:a 192k -ac 2 \
         -map 0:s? -c:s copy \
         -movflags +faststart \
         "$output_file" 2>>"${LOG_DIR}/ffmpeg_audio.log"; then
-      
+
       log INFO "Conversão de áudio concluída: $filename"
-      
-      # Verificar tamanho
-      if [ -f "$output_file" ]; then
-        local orig_size=$(stat -c%s "$file" 2>/dev/null || echo 0)
-        local conv_size=$(stat -c%s "$output_file" 2>/dev/null || echo 0)
-        
-        if [ "$conv_size" -gt $((orig_size * 80 / 100)) ]; then
-          # Substituir original pelo convertido
-          mv "$output_file" "$file"
-          log INFO "Arquivo MP4 atualizado com áudio AAC"
-        else
-          log ERRO "Arquivo convertido muito pequeno"
-          rm -f "$output_file"
-          unmark_processing "$file"
-          return 1
-        fi
-      fi
-      
+      mv "$output_file" "$file"
+      log INFO "Arquivo MP4 atualizado com áudio AAC"
       unmark_processing "$file"
     else
       log ERRO "Falha na conversão de áudio: $filename"
+      rm -f "$output_file"
       unmark_processing "$file"
       return 1
     fi
   else
     log INFO "Áudio já é AAC, não precisa converter: $filename"
   fi
-  
-  # Mover para Jellyfin
+
   move_to_jellyfin "$file" "$filename"
+  cleanup_source_dir "$file"
   return 0
 }
 
@@ -261,41 +219,27 @@ process_file() {
   local filename="$(basename "$file")"
   local extension="${filename##*.}"
   extension=$(echo "$extension" | tr '[:upper:]' '[:lower:]')
-  
-  # Verificar se está na pasta incomplete (download em andamento)
+
+  # Ignorar arquivos ainda sendo baixados
   if echo "$file" | grep -q "incomplete"; then
     log INFO "Arquivo na pasta incomplete (download em andamento), ignorando: $filename"
     return 0
   fi
-  
-  # Verificar se já está em processamento
+
+  # Ignorar se já está em processamento
   if is_processing "$file"; then
     log INFO "Arquivo já está em processamento, ignorando: $filename"
     return 0
   fi
-  
-  # Verificar se já existe no Jellyfin
+
+  # Ignorar se já existe no Jellyfin
   local filename_only="$(basename "${file%.*}")"
   local jellyfin_path="${JELLYFIN_MEDIA_DIR%/}/Filmes/${filename_only}.mp4"
   if [ -f "$jellyfin_path" ]; then
-    local jellyfin_size=$(stat -c%s "$jellyfin_path" 2>/dev/null || echo 0)
-    local file_size=$(stat -c%s "$file" 2>/dev/null || echo 0)
-    
-    local min_size=$((file_size / 10))
-    if [ "$min_size" -lt 100000000 ]; then
-      min_size=100000000
-    fi
-    
-    if [ "$jellyfin_size" -gt "$min_size" ]; then
-      log INFO "Arquivo já existe no Jellyfin (${jellyfin_size} bytes), ignorando: $filename"
-      return 0
-    else
-      log INFO "Arquivo no Jellyfin incompleto (${jellyfin_size} bytes), processando..."
-      rm -f "$jellyfin_path"
-    fi
+    log INFO "Arquivo já existe no Jellyfin, ignorando: $filename"
+    return 0
   fi
-  
-  # Processar de acordo com a extensão
+
   if [[ "$extension" == "mkv" ]]; then
     process_mkv "$file"
   elif [[ "$extension" == "mp4" ]]; then
@@ -310,9 +254,8 @@ process_file() {
 if [[ "$1" == "--monitor" ]]; then
   log INFO "Iniciando monitoramento..."
   clean_old_locks
-  
+
   while true; do
-    # Exclui arquivos na pasta incomplete - arquivos ainda sendo baixados
     find "$QB_DOWNLOADS_DIR" -type f \( -name "*.mkv" -o -name "*.mp4" \) ! -path "*/incomplete/*" -print0 | while IFS= read -r -d $'\0' file; do
       process_file "$file"
     done
