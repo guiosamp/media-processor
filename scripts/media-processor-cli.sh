@@ -5,6 +5,7 @@ QB_DOWNLOADS_DIR='/mnt/media/qbittorrent/downloads/'
 CONVERTER_SCRIPT="$(dirname "$0")/converter_mp4.sh"
 JELLYFIN_MEDIA_DIR='/mnt/media/jellyfin/media/'
 TELEGRAM_NOTIFIER_SCRIPT="$(dirname "$0")/telegram-notifier.sh"
+FETCH_MEDIA_SCRIPT="$(dirname "$0")/fetch-media-info.sh"
 LOG_DIR='/var/log/media-processor/'
 LOG_FILE="${LOG_DIR}/$(date +%Y-%m-%d).log"
 PROCESSING_DIR="${LOG_DIR}/processing"
@@ -52,10 +53,11 @@ clean_old_locks() {
 # nunca a raiz de downloads em si.
 cleanup_source_dir() {
   local file="$1"
-  local dirpath="$(realpath "$(dirname "$file")")"
-  local downloads_root="$(realpath "${QB_DOWNLOADS_DIR%/}")"
+  local dirpath
+  dirpath="$(realpath "$(dirname "$file")")"
+  local downloads_root
+  downloads_root="$(realpath "${QB_DOWNLOADS_DIR%/}")"
 
-  # Garante que é uma subpasta, não a raiz
   if [[ "$dirpath" == "$downloads_root" ]]; then
     log INFO "Arquivo estava na raiz de downloads, nenhuma pasta para apagar: $dirpath"
     return 0
@@ -77,28 +79,69 @@ cleanup_source_dir() {
 # Função para verificar codec de áudio
 get_audio_codec() {
   local file="$1"
-  ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of default=noprint_wrappers=1:nokey=1 "$file" 2>/dev/null || echo "unknown"
+  ffprobe -v error -select_streams a:0 -show_entries stream=codec_name \
+    -of default=noprint_wrappers=1:nokey=1 "$file" 2>/dev/null || echo "unknown"
 }
 
 # Função para verificar se precisa converter áudio
 needs_audio_conversion() {
   local file="$1"
-  local codec=$(get_audio_codec "$file")
+  local codec
+  codec=$(get_audio_codec "$file")
 
   if [[ "$codec" == "unknown" ]] || [[ -z "$codec" ]]; then
     log INFO "Não foi possível detectar codec de áudio em: $(basename "$file")"
-    return 0  # Precisa converter
+    return 0
   fi
 
   codec=$(echo "$codec" | tr '[:upper:]' '[:lower:]')
 
   if [[ "$codec" == "aac" ]]; then
     log INFO "Codec de áudio já é AAC em: $(basename "$file")"
-    return 1  # Não precisa converter
+    return 1
   else
     log INFO "Codec de áudio é '$codec' (não AAC) em: $(basename "$file")"
-    return 0  # Precisa converter
+    return 0
   fi
+}
+
+# Busca informações do filme no TMDB e envia notificação via Telegram
+notify_success() {
+  local filename="$1"
+  local jellyfin_dir="$2"
+  local file_size="$3"
+
+  [ ! -x "$TELEGRAM_NOTIFIER_SCRIPT" ] && return 0
+
+  local poster_url=""
+  local overview=""
+  local titulo=""
+
+  # Busca informações no TMDB se o script estiver disponível
+  if [ -x "$FETCH_MEDIA_SCRIPT" ]; then
+    local media_info
+    # Captura apenas a linha JSON (começa com "{")
+    media_info=$("$FETCH_MEDIA_SCRIPT" "$filename" 2>/dev/null | grep '^{')
+
+    if [[ -n "$media_info" ]]; then
+      poster_url=$(echo "$media_info" | jq -r '.poster // ""' 2>/dev/null)
+      overview=$(echo "$media_info"   | jq -r '.sinopse // ""' 2>/dev/null)
+      titulo=$(echo "$media_info"     | jq -r '.titulo // ""' 2>/dev/null)
+      log INFO "Informações TMDB obtidas para: $filename (poster: ${poster_url:+sim})"
+    else
+      log INFO "Sem resultado no TMDB para: $filename"
+    fi
+  fi
+
+  # Monta mensagem usando printf para garantir quebras de linha reais
+  local message
+  message=$(printf "✅ <b>Processamento concluído</b>\n\n📁 <b>Arquivo:</b> %s\n🎬 <b>Título:</b> %s\n📂 <b>Destino:</b> %s\n💾 <b>Tamanho:</b> %s" \
+    "$filename" \
+    "${titulo:-não identificado}" \
+    "$jellyfin_dir" \
+    "$file_size")
+
+  "$TELEGRAM_NOTIFIER_SCRIPT" --message "$message" -p "$poster_url" -o "$overview"
 }
 
 # Função para mover arquivo para Jellyfin
@@ -113,16 +156,11 @@ move_to_jellyfin() {
   if [ $? -eq 0 ]; then
     log INFO "Movido para Jellyfin: $mp4_file -> $jellyfin_dir"
 
-    if [ -x "$TELEGRAM_NOTIFIER_SCRIPT" ]; then
-      local final_path="${jellyfin_dir}$(basename "$mp4_file")"
-      local file_size="$(du -h "$final_path" 2>/dev/null | cut -f1 || echo "N/A")"
-      "$TELEGRAM_NOTIFIER_SCRIPT" --message "✅ Processamento concluído
+    local final_path="${jellyfin_dir}$(basename "$mp4_file")"
+    local file_size
+    file_size="$(du -h "$final_path" 2>/dev/null | cut -f1 || echo "N/A")"
 
-Arquivo: $filename
-Convertido: Sim ✅
-Movido para: $jellyfin_dir
-Tamanho: $file_size"
-    fi
+    notify_success "$filename" "$jellyfin_dir" "$file_size"
   else
     log ERRO "Falha ao mover para Jellyfin: $mp4_file"
     if [ -x "$TELEGRAM_NOTIFIER_SCRIPT" ]; then
@@ -141,7 +179,6 @@ process_mkv() {
 
   log INFO "Processando arquivo MKV: $filename"
 
-  # Se o MP4 já existe localmente, vai direto para o Jellyfin
   if [ -f "$mp4_file" ]; then
     log INFO "Arquivo MP4 já existe, movendo para Jellyfin: $mp4_file"
     move_to_jellyfin "$mp4_file" "$filename"
@@ -220,19 +257,16 @@ process_file() {
   local extension="${filename##*.}"
   extension=$(echo "$extension" | tr '[:upper:]' '[:lower:]')
 
-  # Ignorar arquivos ainda sendo baixados
   if echo "$file" | grep -q "incomplete"; then
     log INFO "Arquivo na pasta incomplete (download em andamento), ignorando: $filename"
     return 0
   fi
 
-  # Ignorar se já está em processamento
   if is_processing "$file"; then
     log INFO "Arquivo já está em processamento, ignorando: $filename"
     return 0
   fi
 
-  # Ignorar se já existe no Jellyfin
   local filename_only="$(basename "${file%.*}")"
   local jellyfin_path="${JELLYFIN_MEDIA_DIR%/}/Filmes/${filename_only}.mp4"
   if [ -f "$jellyfin_path" ]; then

@@ -1,6 +1,10 @@
-# Media Processor Skill for qBittorrent → Jellyfin
+# Media Processor - Processamento Automático de Downloads
 
-Skill para automatizar o processamento de downloads do qBittorrent, converter arquivos MKV para MP4 e organizar na biblioteca do Jellyfin com notificações via Telegram.
+Skill para automatizar o fluxo completo: qBittorrent → Conversão MKV→MP4 → Organização Jellyfin → Notificações Telegram.
+
+## 🚀 Visão Geral
+
+Este sistema monitora downloads do qBittorrent, converte arquivos MKV para MP4 (compatível com todos os dispositivos), organiza na estrutura do Jellyfin e envia notificações via Telegram.
 
 ## ⚡ Características Principais
 
@@ -34,20 +38,23 @@ cd media-processor
 
 ### Configurar Telegram (opcional)
 ```bash
-# 1. Copiar o template
+# 1. Copiar template e editar com suas credenciais
 cp scripts/telegram-config-example.sh scripts/telegram-config.sh
-
-# 2. Editar com suas credenciais
 nano scripts/telegram-config.sh
 
-# 3. Configurar bot e chat ID conforme instruções em scripts/telegram-notifier.sh --setup
+# 2. Configurar bot e chat ID
+# - Crie um bot com @BotFather
+# - Envie mensagem para o bot
+# - Obtenha seu chat_id em: https://api.telegram.org/bot<TOKEN>/getUpdates
 ```
 
 ### Configurar qBittorrent
 ```bash
-# 1. Ir para Configurações > Downloads no qBittorrent
-# 2. Em "Executar programa externo ao terminar a tarefa", inserir:
-#    /caminho/completo/para/media-processor/scripts/qbittorrent-hook.sh
+# No qBittorrent, vá para:
+# Configurações > Downloads > "Executar programa externo ao terminar a tarefa"
+# Insira: /caminho/completo/para/media-processor/scripts/qbittorrent-hook.sh
+
+# Teste: Baixe um torrent pequeno e verifique os logs em /var/log/media-processor/
 ```
 
 ## 📋 Estrutura do Projeto
@@ -57,17 +64,16 @@ media-processor/
 ├── SKILL.md                 # Documentação da skill (OpenClaw)
 ├── README.md                # Este arquivo
 ├── scripts/
-│   ├── media-processor-cli.sh      # CLI principal
+│   ├── media-processor-cli.sh      # CLI principal (monitoramento)
 │   ├── qbittorrent-hook.sh         # Hook para qBittorrent
 │   ├── telegram-notifier.sh        # Notificações Telegram
 │   ├── telegram-config-example.sh  # Template de configuração
-│   ├── converter_mp4.sh            # Conversor MKV→MP4 principal
+│   ├── telegram-config.sh          # Configuração real (não commitado)
+│   ├── converter_mp4.sh            # Conversor MKV→MP4
+│   ├── fetch-media-info.sh         # Busca metadados TMDB
 │   └── media-processor.service     # Service file systemd
-├── references/
-│   ├── qbittorrent-setup.md        # Configuração do qBittorrent
-│   └── jellyfin-structure.md       # Estrutura do Jellyfin
-├── examples/                # Exemplos de uso
-└── .gitignore              # Arquivos ignorados (dados sensíveis)
+├── references/              # Diretório de referências (vazio após limpeza)
+└── .gitignore              # Arquivos ignorados
 ```
 
 ## 🛠️ Uso
@@ -101,6 +107,7 @@ tail -f /var/log/media-processor/$(date +%Y-%m-%d).log
 - **Downloads do qBittorrent**: `/mnt/media/qbittorrent/downloads/`
 - **Script de conversão**: `scripts/converter_mp4.sh` (incluído no repositório)
 - **Biblioteca Jellyfin**: `/mnt/media/jellyfin/media/`
+- **Logs**: `/var/log/media-processor/` (criar com permissões)
 
 ### Configuração do Telegram
 1. Crie um bot com @BotFather e obtenha o token
@@ -133,13 +140,14 @@ sudo chmod 755 /var/log/media-processor/
 ### Arquivos sendo processados durante download
 O script detecta automaticamente arquivos na pasta `incomplete` e não os processa. Se ainda houver problemas:
 1. Verifique logs: `/var/log/media-processor/qbittorrent-hook.log`
-2. Confirme configuração do qBittorrent
-3. Verifique variável `TORRENT_PATH`
+2. Confirme configuração do qBittorrent (caminho completo do script)
+3. Verifique se o arquivo não está na pasta `/incomplete/`
 
 ### Não recebe notificações Telegram
 1. Verifique se `telegram-config.sh` existe com credenciais corretas
-2. Teste conexão: `curl https://api.telegram.org`
-3. Verifique permissões do arquivo
+2. Teste manualmente: `./scripts/telegram-notifier.sh --message "Teste"`
+3. Verifique logs do script para erros específicos
+4. Confirme que o bot tem permissão para enviar mensagens
 
 ## 📄 Licença
 
@@ -151,7 +159,6 @@ Contribuições são bem-vindas! Sinta-se à vontade para abrir issues e pull re
 
 ## 🔗 Links Úteis
 
-- [Documentação da skill](SKILL.md)
-- [Configuração do qBittorrent](references/qbittorrent-setup.md)
-- [Estrutura do Jellyfin](references/jellyfin-structure.md)
-- [Exemplos de uso](examples/)
+- [Documentação completa da skill](SKILL.md) - Instruções detalhadas de uso e configuração
+- [Documentação do OpenClaw](https://docs.openclaw.ai) - Para uso como skill
+- [TMDB API](https://www.themoviedb.org/documentation/api) - Para metadados de filmes/séries

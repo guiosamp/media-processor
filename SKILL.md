@@ -5,7 +5,7 @@ description: Automatizar processamento de downloads do qBittorrent para Jellyfin
 
 # Media Processor - Skill para qBittorrent → Jellyfin
 
-Skill para automatizar o processamento de downloads do qBittorrent, converter arquivos MKV para MP4 e organizar na biblioteca do Jellyfin com notificações via Telegram.
+Skill para automatizar o processamento de downloads do qBittorrent, converter arquivos MKV para MP4, organizar na biblioteca do Jellyfin e enviar notificações via Telegram.
 
 ## Configuração do Ambiente
 
@@ -50,19 +50,13 @@ Enviar notificação com:
 ## Scripts Disponíveis
 
 ### scripts/media-processor-cli.sh
-CLI unificado para monitoramento e processamento. Veja [scripts/README.md](scripts/README.md) para uso detalhado.
+CLI unificado para monitoramento e processamento.
 
 ### scripts/qbittorrent-hook.sh
 Script para configurar como "Executar programa externo" no qBittorrent. Acionado automaticamente quando downloads são concluídos.
 
 ### scripts/telegram-notifier.sh
 Envia notificações via Telegram usando webhook.
-
-### references/qbittorrent-setup.md
-Configuração do qBittorrent para integração automática.
-
-### references/jellyfin-structure.md
-Estrutura de organização recomendada para Jellyfin.
 
 ## Uso Rápido
 
@@ -121,8 +115,45 @@ Para notificações via Telegram, configure:
 
 Use `scripts/telegram-notifier.sh --setup` para configuração inicial.
 
-## Referências
+## Configuração do qBittorrent
 
-- [Configuração do qBittorrent](references/qbittorrent-setup.md) - Como configurar integração automática
-- [Estrutura do Jellyfin](references/jellyfin-structure.md) - Organização recomendada
-1- [Exemplos de Uso](examples/) - Casos de uso comuns
+Para que o media-processor funcione automaticamente ao finalizar um download, siga os passos:
+
+1.  Vá nas configurações do qBittorrent.
+2.  Encontre a opção "Executar programa externo ao terminar a tarefa".
+3.  No campo de texto, insira o *caminho completo* para o script `qbittorrent-hook.sh`.
+    Exemplo: `/PATH/TO/media-processor/scripts/qbittorrent-hook.sh`
+4.  Clique em "Aplicar" ou "OK" para salvar as configurações.
+
+## Estrutura de organização recomendada para Jellyfin
+
+A melhor prática para organizar sua biblioteca do Jellyfin é criar uma estrutura de diretórios clara e consistente:
+
+```
+/mnt/media/jellyfin/media/
+├── Filmes/
+│   ├── Nome do Filme (Ano)/
+│   │   └── nome_do_filme.mp4
+├── Series/
+│   ├── Nome da Série/
+│   │   ├── Temporada 01/
+│   │   │   └── nome_da_serie - s01e01 - nome_do_episodio.mp4
+│   │   ├── Temporada 02/
+│   │   │   └── ...
+│   └── ...
+└── Animes/
+    ├── Nome do Anime/
+    │   ├── Temporada 01/
+    │   │   └── ...
+    └── ...
+```
+
+**Filmes**: Contém filmes organizados por seus respectivos nomes e anos de lançamento.
+**Séries**: Organizadas por nome da série, temporadas e episódios.
+**Animes**: Semelhante às séries, com nomes de animes e suas temporadas/episódios
+
+**Importante**:
+*   Esta estrutura facilita a catalogação e organização automática pelo Jellyfin.
+*   Considere usar um software de renomeação em massa para padronizar os nomes dos arquivos.
+
+**Considerações Finais**: Adapte essa estrutura às suas necessidades e preferências. Mantenha a organização consistente para evitar problemas de reconhecimento.
