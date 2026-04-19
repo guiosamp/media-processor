@@ -1,159 +1,204 @@
 ---
 name: media-processor
-description: Automatizar processamento de downloads do qBittorrent para Jellyfin, incluindo conversão MKV→MP4, organização de arquivos e notificações Telegram. Use quando: (1) Monitorar pasta de downloads do qBittorrent para processar novos arquivos, (2) Converter arquivos de vídeo para maior compatibilidade, (3) Organizar mídia na estrutura do Jellyfin, (4) Enviar notificações via Telegram sobre processamento concluído, (5) Lidar com problemas de permissões em arquivos de log.
+description: >
+  Pipeline completo de automação de mídia para homelab. Processa downloads do
+  qBittorrent (MKV/MP4), converte para formato compatível com Jellyfin via FFmpeg,
+  busca metadados no TMDB, notifica via Telegram e gerencia torrents via API.
+  Inclui bot Telegram para solicitar downloads e busca via Jackett.
 ---
 
-# Media Processor - Skill para qBittorrent → Jellyfin
+# Media Processor Skill
 
-Skill para automatizar o processamento de downloads do qBittorrent, converter arquivos MKV para MP4, organizar na biblioteca do Jellyfin e enviar notificações via Telegram.
+## Visão Geral
 
-## Configuração do Ambiente
+Esta skill automatiza o fluxo completo de mídia em um homelab Debian com Docker:
 
-### Diretórios Padrão
-- **Downloads do qBittorrent**: `/mnt/media/qbittorrent/downloads/`
-- **Script de conversão**: `/PATH/TO/media-processor/scripts/converter_mp4.sh`
-- **Biblioteca Jellyfin**: `/mnt/media/jellyfin/media/`
-- **Logs**: `/var/log/media-processor/` (necessário criar com permissões adequadas)
+1. qBittorrent conclui o download e dispara um hook
+2. O hook enfileira um job em pasta compartilhada entre container e host
+3. O cron no host processa a fila, converte e move para o Jellyfin
+4. O Telegram recebe notificação com poster e sinopse do filme
 
-### Permissões de Log
-Para evitar erros de permissão:
+## Arquivos do Projeto
+
+| Script | Onde roda | Responsabilidade |
+|--------|-----------|------------------|
+| `qbittorrent-hook.sh` | Container qBittorrent | Recebe `%F` e `%I`, enfileira `.job` |
+| `queue-processor.sh` | Host (cron) | Lê a fila e dispara o processamento |
+| `qbittorrent-hook-host.sh` | Host | Converte, move, notifica, deleta torrent |
+| `converter_mp4.sh` | Host | Converte MKV → MP4 via FFmpeg |
+| `fetch-media-info.sh` | Host | Busca metadados no TMDB |
+| `telegram-notifier.sh` | Host | Envia mensagem/foto no Telegram |
+| `telegram-bot.sh` | Host | Loop de escuta de comandos do Telegram |
+| `torrent-search.sh` | Host | Busca torrents via Jackett API |
+| `torrent-mover.sh` | Host | Move torrents seeding via API qBittorrent |
+| `config.sh` | Host | Credenciais (não versionado) |
+
+## Configuração Necessária
+
+### Variáveis obrigatórias em `config.sh`
+
 ```bash
-sudo mkdir -p /var/log/media-processor/
-sudo chown -R $USER:$USER /var/log/media-processor/
-sudo chmod 755 /var/log/media-processor/
+# Telegram
+TELEGRAM_BOT_TOKEN   # Token do bot principal (notificações)
+TELEGRAM_CHAT_ID     # ID do chat de destino
+MP_BOT_TOKEN         # Token do bot de downloads (separado do OpenClaw)
+MP_CHAT_ID           # ID do chat para o bot de downloads
+
+# TMDB
+TMDB_API_KEY         # Chave da API — https://www.themoviedb.org/settings/api
+TMDB_BASE_URL        # https://api.themoviedb.org/3
+TMDB_POSTER_URL      # https://image.tmdb.org/t/p/w500
+
+# qBittorrent
+QB_URL               # http://localhost:8080
+QB_USER              # Usuário da WebUI
+QB_PASS              # Senha da WebUI
+QB_SAVE_PATH         # /mnt/media/qbittorrent/downloads/
+
+# Jackett
+JACKETT_URL          # http://localhost:9117
+JACKETT_API_KEY      # Chave disponível na tela principal do Jackett
+
+# Jellyfin
+JELLYFIN_MEDIA_DIR   # /mnt/media/jellyfin/media/
 ```
 
-## Fluxo de Trabalho Principal
+## Integração qBittorrent (Docker)
 
-### 1. Monitorar Downloads
-O script principal (`media-processor-cli.sh`) monitora a pasta de downloads do qBittorrent por novos arquivos concluídos.
+O container do qBittorrent precisa montar a pasta de scripts:
 
-### 2. Processar Arquivos
-Para cada arquivo MKV encontrado:
-- Executar `converter_mp4.sh` para conversão
-- Aplicar offset de áudio se necessário (padrão: 0)
-- Opcionalmente deletar original após conversão
+```yaml
+volumes:
+  - /home/guilherme/.openclaw/workspace/skills/media-processor/scripts:/scripts
+```
 
-### 3. Organizar no Jellyfin
-Após conversão:
-- Mover arquivo MP4 para estrutura organizada do Jellyfin
-- Criar diretórios por categoria (filmes/séries)
-- Renomear arquivos seguindo padrão Jellyfin
+Comando no qBittorrent (Opções → Downloads → Programa externo):
+```
+/scripts/qbittorrent-hook.sh "%F" "%I"
+```
 
-### 4. Notificar via Telegram
-Enviar notificação com:
-- Nome do arquivo processado
-- Status da conversão
-- Localização final
-- Estatísticas do processamento
+`%F` = caminho completo do conteúdo | `%I` = info hash do torrent
 
-## Scripts Disponíveis
+## Cron no Host
 
-### scripts/media-processor-cli.sh
-CLI unificado para monitoramento e processamento.
+```cron
+* * * * * /home/guilherme/.openclaw/workspace/skills/media-processor/scripts/queue-processor.sh
+```
 
-### scripts/qbittorrent-hook.sh
-Script para configurar como "Executar programa externo" no qBittorrent. Acionado automaticamente quando downloads são concluídos.
+## Fluxo Detalhado
 
-### scripts/telegram-notifier.sh
-Envia notificações via Telegram usando webhook.
+### Hook (container → host)
 
-## Uso Rápido
+```
+qBittorrent dispara:
+  /scripts/qbittorrent-hook.sh "/downloads/Filme.mkv" "abc123hash"
 
-### Processamento Manual
+qbittorrent-hook.sh:
+  - Converte caminho /downloads → /mnt/media/qbittorrent/downloads
+  - Grava /scripts/queue/1713456789.job com:
+      PATH=/mnt/media/qbittorrent/downloads/Filme.mkv
+      HASH=abc123hash
+```
+
+### Processamento (host)
+
+```
+queue-processor.sh (cron):
+  - Lê cada *.job em scripts/queue/
+  - Extrai PATH e HASH
+  - Chama qbittorrent-hook-host.sh "$PATH" "$HASH"
+
+qbittorrent-hook-host.sh:
+  Para cada arquivo MKV/MP4 encontrado:
+    MKV → converter_mp4.sh → MP4 (AAC, mov_text, faststart)
+    MP4 → verifica codec → recodifica áudio se não for AAC
+    → mv para JELLYFIN_MEDIA_DIR/Filmes/
+    → fetch-media-info.sh → TMDB JSON
+    → telegram-notifier.sh --message ... -p poster -o sinopse
+
+  Se todos OK:
+    → qBittorrent API DELETE torrent + arquivos
+  Se algum falhou:
+    → Mantém torrent, loga aviso
+```
+
+### Bot de Download
+
+```
+Telegram: /baixar Inception 2010
+  → telegram-bot.sh detecta comando
+  → torrent-search.sh --search "Inception 2010" 2000 /tmp/state
+    → Jackett API → filtra resultados com MagnetUri
+    → Retorna lista formatada com tamanho e seeders
+  → Usuário responde "2"
+  → torrent-search.sh --add /tmp/state 2 filmes
+    → qBittorrent API login → torrents/add com autoTMM=false
+  → Download inicia → hook dispara ao concluir
+```
+
+## Limpeza de Títulos (`fetch-media-info.sh`)
+
+O script limpa nomes de arquivo antes de consultar o TMDB, suportando dois padrões comuns:
+
+**Por pontos:** `Filme.2024.1080p.BluRay.x264.DUAL.mkv`
+**Por espaços:** `Filme 2024 HDRip 1080p Dublado - WWW.SITE.COM.mp4`
+
+Padrões removidos:
+- Tags técnicas: `HDRip`, `BluRay`, `WEB-DL`, `x264`, `x265`, `HEVC`, `IMAX`, `OPEN`, `MATTE`
+- Qualidades: `1080p`, `720p`, `4K`, `UHD`
+- Áudio: `AAC`, `AC3`, `DTS`, `Atmos`, `5.1`, `DUAL`
+- Idioma: `Dublado`, `Legendado`, `PT-BR`, `DUB`
+- Tags entre parênteses: `(1080p)`, `(BluRay)`, `(Dublado)`
+- Tags grudadas após parênteses: `(1998)-DVDRipDublado`
+- Domínios: `- WWW.SITE.COM`, `- The Pirate Filmes`
+- Grupos: `YTS`, `RARBG`, `ETRG`, `YIFY`
+
+Fallbacks de busca:
+1. `pt-BR` com ano
+2. `en-US` com ano
+3. `pt-BR` sem ano
+
+## Dependências do Host
+
 ```bash
-./scripts/media-processor-cli.sh --process /mnt/media/qbittorrent/downloads/
+# Obrigatórias
+ffmpeg    # Conversão de vídeo/áudio
+ffprobe   # Detecção de codec (incluso no ffmpeg)
+jq        # Parse de JSON
+python3   # Encoding de URL (urllib.parse)
+curl      # Chamadas HTTP
+
+# Instalação
+sudo apt install ffmpeg jq python3 curl -y
 ```
 
-### Monitoramento Contínuo (Serviço)
-```bash
-./scripts/media-processor-cli.sh --monitor --daemon
-```
-
-### Configurar como Serviço Systemd
-```bash
-sudo cp scripts/media-processor.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable media-processor
-sudo systemctl start media-processor
-```
-
-## Solução de Problemas
-
-### Erros de Permissão
-Se encontrar erros de permissão em arquivos de log:
-1. Verifique proprietário dos diretórios de log
-2. Ajuste permissões com `chmod` e `chown`
-3. Configure logs em diretório com permissão de escrita
-
-### Arquivos Não Processados
-1. Verifique se arquivos são MKV válidos
-2. Confirme espaço em disco disponível
-3. Verifique permissões de leitura/escrita
-
-### Processamento de Arquivos Incompletos
-O script agora evita processar arquivos ainda em download:
-1. **Hook do qBittorrent**: Detecta caminhos com "incomplete" e não processa
-2. **Monitoramento**: Exclui arquivos na pasta `/incomplete/`
-3. **Processamento manual**: Verifica se arquivo está na pasta incomplete
-
-Se arquivos ainda estiverem sendo processados durante download:
-- Verifique logs em `/var/log/media-processor/qbittorrent-hook.log`
-- Confirme configuração do qBittorrent (caminho de download completo)
-- Verifique se variável `TORRENT_PATH` está correta
-
-### Notificações Telegram Não Enviadas
-1. Verifique token e chat ID configurados
-2. Confirme conectividade com API do Telegram
-3. Verifique logs para mensagens de erro
-
-## Configuração do Telegram
-
-Para notificações via Telegram, configure:
-- `TELEGRAM_BOT_TOKEN`: Token do bot
-- `TELEGRAM_CHAT_ID`: ID do chat para notificações
-
-Use `scripts/telegram-notifier.sh --setup` para configuração inicial.
-
-## Configuração do qBittorrent
-
-Para que o media-processor funcione automaticamente ao finalizar um download, siga os passos:
-
-1.  Vá nas configurações do qBittorrent.
-2.  Encontre a opção "Executar programa externo ao terminar a tarefa".
-3.  No campo de texto, insira o *caminho completo* para o script `qbittorrent-hook.sh`.
-    Exemplo: `/PATH/TO/media-processor/scripts/qbittorrent-hook.sh`
-4.  Clique em "Aplicar" ou "OK" para salvar as configurações.
-
-## Estrutura de organização recomendada para Jellyfin
-
-A melhor prática para organizar sua biblioteca do Jellyfin é criar uma estrutura de diretórios clara e consistente:
+## Logs
 
 ```
-/mnt/media/jellyfin/media/
-├── Filmes/
-│   ├── Nome do Filme (Ano)/
-│   │   └── nome_do_filme.mp4
-├── Series/
-│   ├── Nome da Série/
-│   │   ├── Temporada 01/
-│   │   │   └── nome_da_serie - s01e01 - nome_do_episodio.mp4
-│   │   ├── Temporada 02/
-│   │   │   └── ...
-│   └── ...
-└── Animes/
-    ├── Nome do Anime/
-    │   ├── Temporada 01/
-    │   │   └── ...
-    └── ...
+/var/log/media-processor/
+├── YYYY-MM-DD.log    # Processamento diário
+├── ffmpeg.log        # Saída do FFmpeg
+└── torrent-mover.log # Movimentação de torrents
 ```
 
-**Filmes**: Contém filmes organizados por seus respectivos nomes e anos de lançamento.
-**Séries**: Organizadas por nome da série, temporadas e episódios.
-**Animes**: Semelhante às séries, com nomes de animes e suas temporadas/episódios
+## Notas Importantes
 
-**Importante**:
-*   Esta estrutura facilita a catalogação e organização automática pelo Jellyfin.
-*   Considere usar um software de renomeação em massa para padronizar os nomes dos arquivos.
+- `config.sh` nunca deve ser versionado — está no `.gitignore`
+- O bot Telegram deve usar um token **separado** do OpenClaw para evitar conflito no `getUpdates`
+- Legendas PGS (bitmap) são descartadas silenciosamente na conversão para MP4
+- O torrent só é excluído se **todos** os arquivos forem processados sem erro
+- Para pastas com múltiplos vídeos, todos são processados antes da deleção do torrent
 
-**Considerações Finais**: Adapte essa estrutura às suas necessidades e preferências. Mantenha a organização consistente para evitar problemas de reconhecimento.
+## Troubleshooting
+
+**Script não executa no qBittorrent:**
+Verifique se o volume `/scripts` está montado no `docker-compose.yml` e se o script tem permissão de execução (`chmod +x`).
+
+**TMDB retorna vazio:**
+Use `DEBUG=1 ./fetch-media-info.sh "arquivo.mp4"` para ver o título e ano detectados. Ajuste o nome se necessário.
+
+**Jackett não encontra resultados:**
+Pesquise diretamente pelo título em português — trackers brasileiros indexam pelos títulos PT.
+
+**Torrent não é deletado:**
+Verifique no log se houve falha no processamento. O torrent é mantido intencionalmente quando há erros.

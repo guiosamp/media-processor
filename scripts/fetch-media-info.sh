@@ -23,7 +23,10 @@ clean_title() {
   # Remove tags técnicas entre parênteses: "(1080p)", "(BluRay)", "(Dublado)", etc.
   title=$(echo "$title" | sed -E \
     's/ \(([0-9]{3,4}[pP]|2160[pP]?|4K|UHD|HDR[a-zA-Z]*|IMAX|OPEN|MATTE|BDRip|BluRay|WEB[a-zA-Z-]*|DVDRip|DVD|REMUX|x264|x265|h264|h265|HEVC|AAC|AC3|DTS|Dublado|Legendado|DUB|LEG)[^)]*\)//gi')
-
+  
+  # Remove tags grudadas após parênteses: "(1998)-DVDRipDublado PT -By Guivon" → "(1998)"
+  title=$(echo "$title" | sed -E 's/\)-[A-Za-z]*[A-Za-z].*/)/g')
+  
   # Remove " - Qualquer coisa" no final (ex: "- The Pirate Filmes", "- WWW.SITE.COM")
   title=$(echo "$title" | sed -E 's/ - [A-Za-z].*$//i')
 

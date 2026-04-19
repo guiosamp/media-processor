@@ -7,14 +7,14 @@ CONFIG_FILE="$(dirname "$0")/telegram-config.sh"
 if [ -f "$CONFIG_FILE" ]; then
   source "$CONFIG_FILE"
 else
-  TELEGRAM_BOT_TOKEN="<SEU_BOT_TOKEN>"
+  MP_BOT_TOKEN="<SEU_BOT_TOKEN>"
   TELEGRAM_CHAT_ID="<SEU_CHAT_ID>"
 fi
 
 # Verifica configuração
 check_config() {
-  if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ "$TELEGRAM_BOT_TOKEN" == "<SEU_BOT_TOKEN>" ]; then
-    echo "Erro: TELEGRAM_BOT_TOKEN não configurado." >&2
+  if [ -z "$MP_BOT_TOKEN" ] || [ "$MP_BOT_TOKEN" == "<SEU_BOT_TOKEN>" ]; then
+    echo "Erro: MP_BOT_TOKEN não configurado." >&2
     exit 1
   fi
   if [ -z "$TELEGRAM_CHAT_ID" ] || [ "$TELEGRAM_CHAT_ID" == "<SEU_CHAT_ID>" ]; then
@@ -26,7 +26,7 @@ check_config() {
 # Envia mensagem de texto simples
 send_message() {
   local message="$1"
-  local url="https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage"
+  local url="https://api.telegram.org/bot${MP_BOT_TOKEN}/sendMessage"
 
   # Usa JSON para evitar problemas de encoding com acentos, &, +, etc.
   local payload
@@ -44,7 +44,7 @@ send_message() {
 send_photo() {
   local poster_url="$1"
   local caption="$2"
-  local url="https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendPhoto"
+  local url="https://api.telegram.org/bot${MP_BOT_TOKEN}/sendPhoto"
 
   # Telegram limita caption a 1024 caracteres
   caption="${caption:0:1024}"
@@ -122,7 +122,7 @@ case "$1" in
     echo "   https://api.telegram.org/bot<SEU_TOKEN>/getUpdates"
     echo "3. Copie o 'id' dentro de 'chat' — esse é seu CHAT_ID"
     echo "4. Crie o arquivo telegram-config.sh com:"
-    echo "   TELEGRAM_BOT_TOKEN=\"seu_token\""
+    echo "   MP_BOT_TOKEN=\"seu_token\""
     echo "   TELEGRAM_CHAT_ID=\"seu_chat_id\""
     ;;
 
