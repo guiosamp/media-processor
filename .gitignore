@@ -2,7 +2,7 @@
 .env
 *.tmp
 .DS_Store
-telegram-config.sh
+config.sh
 *.config.local
 *secrets*
 */secrets/*

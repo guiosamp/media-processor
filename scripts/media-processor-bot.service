@@ -1,0 +1,19 @@
+[Unit]
+Description=Media Processor Telegram Bot
+After=network.target
+
+[Service]
+Type=simple
+User=SEU_USUARIO_AQUI
+WorkingDirectory=/home/SEU_USUARIO/.openclaw/workspace/skills/media-processor/scripts
+ExecStart=/bin/bash /home/SEU_USUARIO/.openclaw/workspace/skills/media-processor/scripts/telegram-bot.sh
+
+Restart=always
+RestartSec=5
+
+# Logs (opcional, mas recomendo)
+StandardOutput=append:/var/log/media-processor/telegram-bot.log
+StandardError=append:/var/log/media-processor/telegram-bot.log
+
+[Install]
+WantedBy=multi-user.target
