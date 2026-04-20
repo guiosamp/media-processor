@@ -2,7 +2,7 @@
 name: media-processor
 description: >
   Pipeline completo de automação de mídia para homelab. Processa downloads do
-  qBittorrent (MKV/MP4), converte para formato compatível com Jellyfin via FFmpeg,
+  qBittorrent (MKV/MP4), converte para formato compatível com SmartTVs antigas via FFmpeg,
   busca metadados no TMDB, notifica via Telegram e gerencia torrents via API.
   Inclui bot Telegram para solicitar downloads e busca via Jackett.
 ---
@@ -30,7 +30,6 @@ Esta skill automatiza o fluxo completo de mídia em um homelab Debian com Docker
 | `telegram-notifier.sh` | Host | Envia mensagem/foto no Telegram |
 | `telegram-bot.sh` | Host | Loop de escuta de comandos do Telegram |
 | `torrent-search.sh` | Host | Busca torrents via Jackett API |
-| `torrent-mover.sh` | Host | Move torrents seeding via API qBittorrent |
 | `config.sh` | Host | Credenciais (não versionado) |
 
 ## Configuração Necessária
@@ -39,8 +38,6 @@ Esta skill automatiza o fluxo completo de mídia em um homelab Debian com Docker
 
 ```bash
 # Telegram
-TELEGRAM_BOT_TOKEN   # Token do bot principal (notificações)
-TELEGRAM_CHAT_ID     # ID do chat de destino
 MP_BOT_TOKEN         # Token do bot de downloads (separado do OpenClaw)
 MP_CHAT_ID           # ID do chat para o bot de downloads
 
@@ -69,7 +66,7 @@ O container do qBittorrent precisa montar a pasta de scripts:
 
 ```yaml
 volumes:
-  - /home/guilherme/.openclaw/workspace/skills/media-processor/scripts:/scripts
+  - /home/$USER/.openclaw/workspace/skills/media-processor/scripts:/scripts
 ```
 
 Comando no qBittorrent (Opções → Downloads → Programa externo):
@@ -82,7 +79,7 @@ Comando no qBittorrent (Opções → Downloads → Programa externo):
 ## Cron no Host
 
 ```cron
-* * * * * /home/guilherme/.openclaw/workspace/skills/media-processor/scripts/queue-processor.sh
+* * * * * /home/$USER/.openclaw/workspace/skills/media-processor/scripts/queue-processor.sh
 ```
 
 ## Fluxo Detalhado
@@ -178,7 +175,7 @@ sudo apt install ffmpeg jq python3 curl -y
 /var/log/media-processor/
 ├── YYYY-MM-DD.log    # Processamento diário
 ├── ffmpeg.log        # Saída do FFmpeg
-└── torrent-mover.log # Movimentação de torrents
+└── converter_mp4.log # Log do converter_mp4.sh
 ```
 
 ## Notas Importantes

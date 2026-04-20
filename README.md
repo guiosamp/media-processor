@@ -53,8 +53,6 @@ media-processor/
 │   ├── telegram-notifier.sh         # Envia notificações via Telegram
 │   ├── telegram-bot.sh              # Bot Telegram para solicitar downloads
 │   ├── torrent-search.sh            # Busca torrents via Jackett API
-│   ├── torrent-mover.sh             # Move torrents completos da pasta incomplete
-│   ├── test-fetch-batch.sh          # Testa fetch-media-info em lote
 │   ├── media-processor.service      # Unit file systemd (opcional)
 │   └── queue/                       # Pasta de jobs pendentes (criada automaticamente)
 ├── references/                      # Documentação de referência
@@ -85,7 +83,7 @@ sudo apt install ffmpeg jq python3 curl -y
 ### 1. Clone o repositório
 
 ```bash
-git clone https://github.com/seu-usuario/media-processor.git
+git clone https://github.com/guiosamp/media-processor.git
 cd media-processor/scripts
 ```
 
@@ -188,6 +186,13 @@ crontab -e
 ### Iniciar o bot
 
 ```bash
+# Systemd (modifique media-processor.service com seu usuário)
+nano media-processor.service
+sudo mv media-processor.service /etc/systemd/system/
+sudo systemctl daemon-reload 
+sudo systemctl enable media-processor 
+sudo systemctl start media-processor
+
 # Em foreground (para testar)
 ./telegram-bot.sh
 
@@ -233,22 +238,6 @@ DEBUG=1 ./fetch-media-info.sh "Nome.Do.Filme.2024.1080p.BluRay.mkv"
 
 Retorna JSON com `titulo`, `titulo_original`, `ano`, `sinopse`, `poster` e `nota`.
 
-### `test-fetch-batch.sh`
-
-Testa o `fetch-media-info.sh` contra todos os filmes da biblioteca Jellyfin.
-
-```bash
-./test-fetch-batch.sh
-```
-
-### `torrent-mover.sh`
-
-Move torrents completos (em estado seeding) da pasta `incomplete` para a pasta de downloads.
-
-```bash
-./torrent-mover.sh
-```
-
 ---
 
 ## Logs
@@ -256,8 +245,8 @@ Move torrents completos (em estado seeding) da pasta `incomplete` para a pasta d
 ```
 /var/log/media-processor/
 ├── YYYY-MM-DD.log      # Log diário do processamento
-├── ffmpeg.log          # Log detalhado do FFmpeg
-└── torrent-mover.log   # Log do movimentador de torrents
+├── converter_mp4.log   # Log detalhado do FFmpeg
+└── telegram-bot.log    # Log do bot Telegram
 ```
 
 ---

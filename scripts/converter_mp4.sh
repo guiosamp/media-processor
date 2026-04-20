@@ -1,7 +1,6 @@
 #!/bin/bash
 # ============================================================
 #  converter_mp4.sh — Converte MKV → MP4 (com ajuste de áudio)
-#  Versão SIMPLIFICADA: Remove verificação bugada de tamanho
 # ============================================================
 
 shopt -s globstar nullglob

@@ -3,11 +3,11 @@
 # Script para buscar informações de mídia no TMDB
 
 # Carrega configuração de arquivo separado se existir
-CONFIG_FILE="$(dirname "$0")/telegram-config.sh"
+CONFIG_FILE="$(dirname "$0")/config.sh"
 if [ -f "$CONFIG_FILE" ]; then
   source "$CONFIG_FILE"
 else
-  echo "Erro: telegram-config.sh não encontrado. Copie telegram-config-example.sh e preencha." >&2
+  echo "Erro: config.sh não encontrado. Copie config-example.sh e preencha." >&2
   exit 1
 fi
 

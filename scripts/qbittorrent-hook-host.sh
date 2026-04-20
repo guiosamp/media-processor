@@ -4,12 +4,12 @@
 # Chamado pelo queue-processor.sh
 
 SCRIPT_DIR="$(dirname "$(realpath "$0")")"
-CONFIG_FILE="${SCRIPT_DIR}/telegram-config.sh"
+CONFIG_FILE="${SCRIPT_DIR}/config.sh"
 
 if [ -f "$CONFIG_FILE" ]; then
   source "$CONFIG_FILE"
 else
-  echo "Erro: telegram-config.sh não encontrado." >&2
+  echo "Erro: config.sh não encontrado." >&2
   exit 1
 fi
 

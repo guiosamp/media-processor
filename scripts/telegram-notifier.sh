@@ -3,7 +3,7 @@
 # Script para enviar notificações via Telegram
 
 # Carrega configuração de arquivo separado se existir
-CONFIG_FILE="$(dirname "$0")/telegram-config.sh"
+CONFIG_FILE="$(dirname "$0")/config.sh"
 if [ -f "$CONFIG_FILE" ]; then
   source "$CONFIG_FILE"
 else
@@ -121,7 +121,7 @@ case "$1" in
     echo "2. Envie uma mensagem para o bot e acesse:"
     echo "   https://api.telegram.org/bot<SEU_TOKEN>/getUpdates"
     echo "3. Copie o 'id' dentro de 'chat' — esse é seu CHAT_ID"
-    echo "4. Crie o arquivo telegram-config.sh com:"
+    echo "4. Crie o arquivo config.sh com:"
     echo "   MP_BOT_TOKEN=\"seu_token\""
     echo "   TELEGRAM_CHAT_ID=\"seu_chat_id\""
     ;;

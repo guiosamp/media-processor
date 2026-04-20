@@ -2,11 +2,11 @@
 
 # Bot Telegram para download de filmes/séries via qBittorrent + Jackett
 
-CONFIG_FILE="$(dirname "$0")/telegram-config.sh"
+CONFIG_FILE="$(dirname "$0")/config.sh"
 if [ -f "$CONFIG_FILE" ]; then
   source "$CONFIG_FILE"
 else
-  echo "Erro: telegram-config.sh não encontrado." >&2
+  echo "Erro: config.sh não encontrado." >&2
   exit 1
 fi
 
