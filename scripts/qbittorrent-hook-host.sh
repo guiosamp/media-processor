@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# Roda no HOST — processa o conteúdo baixado pelo qBittorrent
-# Chamado pelo queue-processor.sh
+# Processamento principal — roda no host
+# Chamado pelo queue-processor.sh com: <caminho> <hash> <categoria>
 
 SCRIPT_DIR="$(dirname "$(realpath "$0")")"
 CONFIG_FILE="${SCRIPT_DIR}/config.sh"
@@ -16,19 +16,32 @@ fi
 CONVERTER_SCRIPT="${SCRIPT_DIR}/converter_mp4.sh"
 FETCH_MEDIA_SCRIPT="${SCRIPT_DIR}/fetch-media-info.sh"
 TELEGRAM_NOTIFIER_SCRIPT="${SCRIPT_DIR}/telegram-notifier.sh"
-JELLYFIN_FILMES_DIR="${JELLYFIN_MEDIA_DIR%/}/Filmes"
 LOG_DIR="/var/log/media-processor"
 LOG_FILE="${LOG_DIR}/$(date +%Y-%m-%d).log"
 
-mkdir -p "$LOG_DIR" "$JELLYFIN_FILMES_DIR"
+mkdir -p "$LOG_DIR"
 
 log() {
   echo "$(date '+%Y-%m-%d %H:%M:%S') [$1] $2" | tee -a "$LOG_FILE"
 }
 
+# ── Destino por categoria ─────────────────────────────────────────────────────
+
+get_dest_dir() {
+  local category="$1"
+  if [ "$category" = "series" ]; then
+    echo "${JELLYFIN_MEDIA_DIR%/}/Series"
+  else
+    echo "${JELLYFIN_MEDIA_DIR%/}/Filmes"
+  fi
+}
+
+# ── Notificação Telegram ──────────────────────────────────────────────────────
+
 notify() {
   local filename="$1"
   local jellyfin_path="$2"
+  local category="$3"
 
   [ ! -x "$TELEGRAM_NOTIFIER_SCRIPT" ] && return 0
 
@@ -47,8 +60,12 @@ notify() {
     fi
   fi
 
+  local emoji="✅ <b>Novo filme disponível</b>"
+  [ "$category" = "series" ] && emoji="📺 <b>Nova série disponível</b>"
+
   local message
-  message=$(printf "✅ <b>Novo filme disponível</b>\n\n🎬 <b>Título:</b> %s\n📁 <b>Arquivo:</b> %s\n💾 <b>Tamanho:</b> %s" \
+  message=$(printf "%s\n\n🎬 <b>Título:</b> %s\n📁 <b>Arquivo:</b> %s\n💾 <b>Tamanho:</b> %s" \
+    "$emoji" \
     "${titulo:-não identificado}" \
     "$filename" \
     "$file_size")
@@ -56,33 +73,46 @@ notify() {
   "$TELEGRAM_NOTIFIER_SCRIPT" --message "$message" -p "$poster_url" -o "$overview"
 }
 
+# ── Deletar torrent ───────────────────────────────────────────────────────────
+
 qbt_delete() {
   local hash="$1"
   [ -z "$hash" ] && return 0
 
   local cookie
-  cookie=$(curl -s -c -     --data "username=${QB_USER}&password=${QB_PASS}"     "${QB_URL}/api/v2/auth/login" | grep SID | awk '{print "SID="$NF}')
+  cookie=$(curl -s -c - \
+    --data "username=${QB_USER}&password=${QB_PASS}" \
+    "${QB_URL}/api/v2/auth/login" | grep SID | awk '{print "SID="$NF}')
 
   if [ -z "$cookie" ]; then
     log ERRO "Falha ao autenticar no qBittorrent para deletar torrent"
     return 1
   fi
 
-  curl -s -b "$cookie" -X POST     --data "hashes=${hash}&deleteFiles=true"     "${QB_URL}/api/v2/torrents/delete" > /dev/null
+  curl -s -b "$cookie" -X POST \
+    --data "hashes=${hash}&deleteFiles=true" \
+    "${QB_URL}/api/v2/torrents/delete" > /dev/null
 
-  log INFO "Torrent deletado do qBittorrent (hash: ${hash})"
+  log INFO "Torrent deletado (hash: ${hash})"
 }
+
+# ── Processar arquivo ─────────────────────────────────────────────────────────
 
 process_file() {
   local file="$1"
+  local category="$2"
   local filename
   filename="$(basename "$file")"
   local ext="${filename##*.}"
   ext="${ext,,}"
 
-  log INFO "Processando: $filename"
+  local dest_dir
+  dest_dir="$(get_dest_dir "$category")"
+  mkdir -p "$dest_dir"
 
-  local dest_mp4="${JELLYFIN_FILMES_DIR}/${filename%.*}.mp4"
+  log INFO "[$category] Processando: $filename"
+
+  local dest_mp4="${dest_dir}/${filename%.*}.mp4"
 
   if [ -f "$dest_mp4" ]; then
     log INFO "Já existe no Jellyfin, ignorando: $filename"
@@ -94,9 +124,9 @@ process_file() {
     if "$CONVERTER_SCRIPT" --path "$file"; then
       local mp4_file="${file%.*}.mp4"
       if [ -f "$mp4_file" ]; then
-        mv "$mp4_file" "$JELLYFIN_FILMES_DIR/"
-        log INFO "Movido para Jellyfin: $(basename "$mp4_file")"
-        notify "$filename" "${JELLYFIN_FILMES_DIR}/$(basename "$mp4_file")"
+        mv "$mp4_file" "${dest_dir}/"
+        log INFO "Movido para Jellyfin ($category): $(basename "$mp4_file")"
+        notify "$filename" "${dest_dir}/$(basename "$mp4_file")" "$category"
       else
         log ERRO "MP4 não encontrado após conversão: $mp4_file"
         return 1
@@ -133,8 +163,8 @@ process_file() {
       cp "$file" "$dest_mp4"
     fi
 
-    log INFO "Movido para Jellyfin: $(basename "$dest_mp4")"
-    notify "$filename" "$dest_mp4"
+    log INFO "Movido para Jellyfin ($category): $(basename "$dest_mp4")"
+    notify "$filename" "$dest_mp4" "$category"
 
   else
     log INFO "Extensão não suportada, ignorando: $filename"
@@ -145,19 +175,20 @@ process_file() {
 
 CONTENT_PATH="$1"
 TORRENT_HASH="$2"
+CATEGORY="${3:-filmes}"
 
 if [ -z "$CONTENT_PATH" ]; then
-  echo "Uso: $0 <caminho> [hash]"
+  echo "Uso: $0 <caminho> [hash] [filmes|series]"
   exit 1
 fi
 
-log INFO "=== Iniciando: $CONTENT_PATH ==="
+log INFO "=== Iniciando [$CATEGORY]: $CONTENT_PATH ==="
 
 PROCESSED=0
 FAILED=0
 
 if [ -f "$CONTENT_PATH" ]; then
-  if process_file "$CONTENT_PATH"; then
+  if process_file "$CONTENT_PATH" "$CATEGORY"; then
     PROCESSED=$((PROCESSED + 1))
   else
     FAILED=$((FAILED + 1))
@@ -165,7 +196,7 @@ if [ -f "$CONTENT_PATH" ]; then
 elif [ -d "$CONTENT_PATH" ]; then
   log INFO "Pasta detectada, buscando vídeos..."
   while IFS= read -r -d $'\0' file; do
-    if process_file "$file"; then
+    if process_file "$file" "$CATEGORY"; then
       PROCESSED=$((PROCESSED + 1))
     else
       FAILED=$((FAILED + 1))
@@ -178,7 +209,6 @@ fi
 
 log INFO "=== Concluído — OK: $PROCESSED | Falhas: $FAILED ==="
 
-# Deleta o torrent do qBittorrent apenas se tudo foi processado com sucesso
 if [ "$FAILED" -eq 0 ] && [ "$PROCESSED" -gt 0 ]; then
   qbt_delete "$TORRENT_HASH"
 else

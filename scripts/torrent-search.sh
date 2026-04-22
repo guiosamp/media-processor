@@ -10,7 +10,7 @@ else
   exit 1
 fi
 
-# ── Funções qBittorrent ────────────────────────────────────────────────────────
+# ── Funções qBittorrent ───────────────────────────────────────────────────────
 
 qbt_login() {
   QB_COOKIE=$(curl -s -c - \
@@ -38,19 +38,14 @@ qbt_add_torrent() {
     --data "contentLayout=Original" \
     "${QB_URL}/api/v2/torrents/add")
 
-  if [ "$result" == "Ok." ]; then
-    return 0
-  else
-    echo "Erro ao adicionar torrent: $result" >&2
-    return 1
-  fi
+  [ "$result" == "Ok." ] && return 0 || return 1
 }
 
-# ── Funções Jackett ────────────────────────────────────────────────────────────
+# ── Funções Jackett ───────────────────────────────────────────────────────────
 
 jackett_search() {
   local query="$1"
-  local category="$2"  # 2000=filmes, 5000=séries
+  local category="$2"
 
   local encoded_query
   encoded_query=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))" "$query")
@@ -84,7 +79,7 @@ shift
 case "$COMMAND" in
   --search)
     QUERY="$1"
-    CATEGORY="${2:-2000}"  # padrão: filmes
+    CATEGORY="${2:-2000}"
     STATE_FILE="${3:-/tmp/mp_pending_$$}"
 
     if [ -z "$QUERY" ]; then
@@ -94,14 +89,13 @@ case "$COMMAND" in
 
     response=$(jackett_search "$QUERY" "$CATEGORY")
 
-    # Verifica se retornou resultados
     total=$(echo "$response" | jq '.Results | length' 2>/dev/null)
     if [ -z "$total" ] || [ "$total" -eq 0 ]; then
       echo "NONE"
       exit 0
     fi
 
-    # Pega os 5 melhores resultados (ordenados por seeders)
+    # Todos os resultados com MagnetUri, ordenados por seeders
     results=$(echo "$response" | jq '[
       .Results[] |
       select(.MagnetUri != null and .MagnetUri != "") |
@@ -112,7 +106,7 @@ case "$COMMAND" in
         tracker: .TrackerId,
         magnet: .MagnetUri
       }
-    ] | sort_by(-.seeders) | .[0:15]')
+    ] | sort_by(-.seeders)')
 
     count=$(echo "$results" | jq 'length')
     if [ "$count" -eq 0 ]; then
@@ -120,23 +114,24 @@ case "$COMMAND" in
       exit 0
     fi
 
-    # Salva resultados no state file para uso posterior
+    # Salva todos os resultados no state file
     echo "$results" > "$STATE_FILE"
 
-    # Formata mensagem para o Telegram
-    echo "🔍 <b>Resultados para:</b> $QUERY"
-    echo ""
+    # Formata e imprime cada resultado separado por marcador
+    # O telegram-bot.sh lê esses blocos e envia em múltiplas mensagens
+    echo "HEADER:🔍 <b>Resultados para:</b> ${QUERY} (${count} encontrados)"
+
     for i in $(seq 0 $((count - 1))); do
-      titulo=$(echo "$results" | jq -r ".[$i].titulo")
+      titulo=$(echo "$results"  | jq -r ".[$i].titulo")
       tamanho=$(format_size "$(echo "$results" | jq -r ".[$i].tamanho")")
       seeders=$(echo "$results" | jq -r ".[$i].seeders")
       tracker=$(echo "$results" | jq -r ".[$i].tracker")
       num=$((i + 1))
-      echo "${num}. <b>${titulo}</b>"
-      echo "   📦 ${tamanho} | 🌱 ${seeders} seeders | 📡 ${tracker}"
-      echo ""
+      echo "RESULT:${num}. <b>${titulo}</b>"
+      echo "RESULT:   📦 ${tamanho} | 🌱 ${seeders} seeders | 📡 ${tracker}"
     done
-    echo "Responda com o <b>número</b> desejado ou <b>0</b> para cancelar."
+
+    echo "FOOTER:Responda com o <b>número</b> desejado ou <b>0</b> para cancelar."
     ;;
 
   --add)
@@ -150,7 +145,7 @@ case "$COMMAND" in
     fi
 
     if [ ! -f "$STATE_FILE" ]; then
-      echo "Erro: state_file não encontrado: $STATE_FILE" >&2
+      echo "Erro: state_file não encontrado." >&2
       exit 1
     fi
 

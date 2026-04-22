@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Bot Telegram para download de filmes/séries via qBittorrent + Jackett
+# Bot Telegram para download de filmes e séries via qBittorrent + Jackett
 
 CONFIG_FILE="$(dirname "$0")/config.sh"
 if [ -f "$CONFIG_FILE" ]; then
@@ -40,30 +40,22 @@ tg_get_updates() {
 
 # ── Gerenciamento de estado por usuário ───────────────────────────────────────
 
-# Estado possíveis por usuário:
-#   idle                    → aguardando comando
-#   waiting_choice:<query>  → busca feita, aguardando número da escolha
+# Estados:
+#   idle
+#   waiting_choice:filme:<query>
+#   waiting_choice:serie:<query>
 
 get_state() {
-  local chat_id="$1"
-  local state_file="${STATE_DIR}/${chat_id}.state"
-  if [ -f "$state_file" ]; then
-    cat "$state_file"
-  else
-    echo "idle"
-  fi
+  local state_file="${STATE_DIR}/$1.state"
+  [ -f "$state_file" ] && cat "$state_file" || echo "idle"
 }
 
 set_state() {
-  local chat_id="$1"
-  local state="$2"
-  echo "$state" > "${STATE_DIR}/${chat_id}.state"
+  echo "$2" > "${STATE_DIR}/$1.state"
 }
 
 clear_state() {
-  local chat_id="$1"
-  rm -f "${STATE_DIR}/${chat_id}.state"
-  rm -f "${STATE_DIR}/${chat_id}.results"
+  rm -f "${STATE_DIR}/$1.state" "${STATE_DIR}/$1.results"
 }
 
 # ── Handlers ──────────────────────────────────────────────────────────────────
@@ -71,36 +63,81 @@ clear_state() {
 handle_search() {
   local chat_id="$1"
   local query="$2"
-  local category="${3:-2000}"  # 2000=filmes, 5000=séries
+  local type="$3"
+  local category="$4"
 
-  tg_send "$chat_id" "🔎 Buscando: <b>${query}</b>..."
+  tg_send "$chat_id" "🔎 Buscando <b>${type}</b>: <b>${query}</b>..."
 
   local state_file="${STATE_DIR}/${chat_id}.results"
-  local output
-  output=$("$TORRENT_SCRIPT" --search "$query" "$category" "$state_file" 2>/dev/null)
 
-  if [ "$output" == "NONE" ] || [ -z "$output" ]; then
+  # Salva saída em arquivo temporário para preservar newlines corretamente
+  local tmp_output
+  tmp_output=$(mktemp)
+  "$TORRENT_SCRIPT" --search "$query" "$category" "$state_file" > "$tmp_output" 2>/dev/null
+
+  if grep -q "^NONE$" "$tmp_output" || [ ! -s "$tmp_output" ]; then
     tg_send "$chat_id" "❌ Nenhum resultado encontrado para: <b>${query}</b>"
+    rm -f "$tmp_output"
     clear_state "$chat_id"
     return
   fi
 
-  set_state "$chat_id" "waiting_choice:${query}"
-  tg_send "$chat_id" "$output"
+  set_state "$chat_id" "waiting_choice:${type}:${query}"
+
+  # Envia cabeçalho
+  local header
+  header=$(grep "^HEADER:" "$tmp_output" | sed "s/^HEADER://")
+  tg_send "$chat_id" "$header"
+
+  # Constrói blocos de resultados respeitando o limite de 3800 chars
+  local block=""
+  local MAX_LEN=3800
+
+  while IFS= read -r line; do
+    [[ "$line" == HEADER:* ]] && continue
+    [[ "$line" == FOOTER:* ]] && continue
+    [[ -z "$line" ]] && continue
+
+    local entry="${line#RESULT:}"
+
+    if [ $(( ${#block} + ${#entry} + 2 )) -gt $MAX_LEN ]; then
+      tg_send "$chat_id" "$block"
+      block="$entry"
+    else
+      if [ -z "$block" ]; then
+        block="$entry"
+      else
+        block="${block}
+${entry}"
+      fi
+    fi
+  done < "$tmp_output"
+
+  # Envia bloco restante
+  [ -n "$block" ] && tg_send "$chat_id" "$block"
+
+  # Envia rodapé
+  local footer
+  footer=$(grep "^FOOTER:" "$tmp_output" | sed "s/^FOOTER://")
+  tg_send "$chat_id" "$footer"
+
+  rm -f "$tmp_output"
 }
+
 
 handle_choice() {
   local chat_id="$1"
   local choice="$2"
   local state_file="${STATE_DIR}/${chat_id}.results"
 
-  # Determina categoria pelo estado salvo
-  local category="filmes"
   local state
   state=$(get_state "$chat_id")
-  if echo "$state" | grep -q "series"; then
-    category="series"
-  fi
+
+  # Extrai tipo do estado: waiting_choice:filme:... ou waiting_choice:serie:...
+  local type
+  type=$(echo "$state" | cut -d':' -f2)
+  local category="filmes"
+  [ "$type" = "serie" ] && category="series"
 
   local result
   result=$("$TORRENT_SCRIPT" --add "$state_file" "$choice" "$category" 2>/dev/null)
@@ -108,7 +145,9 @@ handle_choice() {
   case "$result" in
     OK:*)
       local titulo="${result#OK:}"
-      tg_send "$chat_id" "✅ Download iniciado: <b>${titulo}</b>
+      local emoji="🎬"
+      [ "$type" = "serie" ] && emoji="📺"
+      tg_send "$chat_id" "${emoji} Download iniciado: <b>${titulo}</b>
 📂 Será processado automaticamente ao concluir."
       clear_state "$chat_id"
       ;;
@@ -133,8 +172,8 @@ handle_message() {
   local state
   state=$(get_state "$chat_id")
 
-  # Verifica autorização (só responde ao seu chat_id)
-  if [ "$chat_id" != "$TELEGRAM_CHAT_ID" ]; then
+  # Verifica autorização
+  if [ "$chat_id" != "$MP_CHAT_ID" ]; then
     tg_send "$chat_id" "⛔ Acesso não autorizado."
     return
   fi
@@ -145,34 +184,50 @@ handle_message() {
       handle_choice "$chat_id" "$text"
       return
     fi
-    # Se enviou outro texto enquanto aguardava, cancela e reprocessa
+    # Novo texto enquanto aguardava — cancela e reprocessa
     clear_state "$chat_id"
   fi
 
   # Comandos
   case "$text" in
-    /baixar\ *|/filme\ *)
-      local query="${text#* }"
-      handle_search "$chat_id" "$query" "2000"
+    /filme\ *|/filme)
+      local query="${text#/filme}"
+      query="${query# }"
+      if [ -z "$query" ]; then
+        tg_send "$chat_id" "ℹ️ Use: /filme <b>título do filme</b>"
+      else
+        handle_search "$chat_id" "$query" "filme" "2000"
+      fi
       ;;
-    /serie\ *|/série\ *)
-      local query="${text#* }"
-      handle_search "$chat_id" "$query" "5000"
+    /serie\ *|/serie\ *|/série\ *|/série)
+      local query="${text#/serie }"
+      query="${query#/série }"
+      query="${query# }"
+      if [ -z "$query" ]; then
+        tg_send "$chat_id" "ℹ️ Use: /serie <b>título da série</b>"
+      else
+        handle_search "$chat_id" "$query" "serie" "5000"
+      fi
       ;;
     /cancelar)
       clear_state "$chat_id"
       tg_send "$chat_id" "🚫 Operação cancelada."
       ;;
     /status)
-      local qbt_torrents
-      qbt_torrents=$(curl -s -b "$(cat ${STATE_DIR}/qbt_cookie 2>/dev/null)" \
-        "${QB_URL}/api/v2/torrents/info?filter=downloading" 2>/dev/null | \
-        jq -r '.[].name' 2>/dev/null | head -5)
+      local cookie
+      cookie=$(curl -s -c - \
+        --data "username=${QB_USER}&password=${QB_PASS}" \
+        "${QB_URL}/api/v2/auth/login" 2>/dev/null | grep SID | awk '{print "SID="$NF}')
 
-      if [ -n "$qbt_torrents" ]; then
+      local torrents
+      torrents=$(curl -s -b "$cookie" \
+        "${QB_URL}/api/v2/torrents/info?filter=downloading" 2>/dev/null | \
+        jq -r '.[] | "• \(.name) (\( .progress * 100 | floor )%)"' 2>/dev/null | head -10)
+
+      if [ -n "$torrents" ]; then
         tg_send "$chat_id" "📥 <b>Downloads em andamento:</b>
 
-${qbt_torrents}"
+${torrents}"
       else
         tg_send "$chat_id" "✅ Nenhum download em andamento."
       fi
@@ -180,19 +235,20 @@ ${qbt_torrents}"
     /ajuda|/help|/start)
       tg_send "$chat_id" "🎬 <b>Media Processor Bot</b>
 
-<b>Comandos disponíveis:</b>
+<b>Comandos:</b>
 
-/baixar <i>título</i> — Busca e baixa um filme
+/filme <i>título</i> — Busca e baixa um filme
 /serie <i>título</i> — Busca e baixa uma série
-/status — Mostra downloads em andamento
+/status — Downloads em andamento
 /cancelar — Cancela a operação atual
 
-<b>Exemplo:</b>
-/baixar Inception 2010
-/serie Breaking Bad"
+<b>Exemplos:</b>
+/filme Inception 2010
+/serie Breaking Bad
+/serie The Last of Us S02"
       ;;
     *)
-      tg_send "$chat_id" "❓ Comando não reconhecido. Use /ajuda para ver os comandos disponíveis."
+      tg_send "$chat_id" "❓ Comando não reconhecido. Use /ajuda."
       ;;
   esac
 }
@@ -206,9 +262,7 @@ log() {
 log "Bot iniciado. Aguardando mensagens..."
 
 offset=0
-if [ -f "$OFFSET_FILE" ]; then
-  offset=$(cat "$OFFSET_FILE")
-fi
+[ -f "$OFFSET_FILE" ] && offset=$(cat "$OFFSET_FILE")
 
 while true; do
   updates=$(tg_get_updates "$offset")
@@ -226,7 +280,7 @@ while true; do
     text=$(echo "$updates"      | jq -r ".result[$i].message.text // empty")
 
     if [ -n "$chat_id" ] && [ -n "$text" ]; then
-      log "Mensagem de $chat_id: $text"
+      log "[$chat_id] $text"
       handle_message "$chat_id" "$text"
     fi
 
